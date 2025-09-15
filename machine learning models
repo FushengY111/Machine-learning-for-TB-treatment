@@ -18,15 +18,15 @@ multi<- function(i){
 set.seed(100)
 multi.boruta<- parallel::mclapply(1:100, multi)
 multi.boruta<- as.data.frame(table(unlist(multi.boruta)))#统计100次重复每个特征出现的次数
-multi.boruta.mirs<- as.character(multi.boruta[which(multi.boruta$Freq>10),1])##设置特征出现次数阈值
+multi.boruta.m<- as.character(multi.boruta[which(multi.boruta$Freq>10),1])##设置特征出现次数阈值
 multi.boruta
 multi.boruta=multi.boruta[-14,]
 train$diagnosis <- as.factor(train$diagnosis)
-m<- paste(as.vector(multi.boruta.mirs, mode = "any"), collapse = "+")
+m<- paste(as.vector(multi.boruta.m, mode = "any"), collapse = "+")
 RFm<- as.formula(paste("diagnosis ~ ",m,sep = ""))
-Boruta.data<- train[,c("diagnosis",multi.boruta.mirs)]
+Boruta.data<- train[,c("diagnosis",multi.boruta.m)]
 colnames(test)[37] = "diagnosis"
-tree.Boruta<- test[,c("diagnosis", multi.boruta.mirs)]
+tree.Boruta<- test[,c("diagnosis", multi.boruta.mrs)]
 ###########运行随机森林
 control<- trainControl(method = 'repeatedcv',
                        number = 10,
@@ -34,7 +34,7 @@ control<- trainControl(method = 'repeatedcv',
 metric <- "Accuracy"
 tunegrid <- expand.grid(.mtry=seq(from =1, to =4))
 modellist<- list()
-for (ntree in c(100, 250, 500, 750, 1000, 1250, 1500)) {
+for (ntree in c(100, 250, 500, 750, 1000, 1250, 1500, 1750, 2000)) {
   set.seed(100)
   fit <- caret::train(RFm, data=Boruta.data, method="rf", metric=metric, tuneGrid=tunegrid, trControl=control, ntree=ntree)
   key <- toString(ntree)
@@ -47,7 +47,7 @@ res<- as.data.frame(res$statistics$Accuracy)
 summary(results)
 ntree = as.numeric(rownames(res)[which(res$Mean == max(res$Mean))])[1]###优化mtry参数
 set.seed(100)
-tunegrid <- expand.grid(.mtry=seq(from = 1, to=4, by = 0.5))
+tunegrid <- expand.grid(.mtry=seq(from = 1, to=4, by = 1))
 modellist<- list()
 control<- trainControl(method = 'repeatedcv',
                        number = 10,
@@ -88,9 +88,9 @@ fit.caret.rpart <- caret::train(diagnosis ~ ., data=train, method='rpart', metri
 fit.caret.rpart$bestTune
 prp(fit.caret.rpart$finalModel, main="RxTB from TB Rpart model", extra=2, varlen=0)
 plot(as.party(fit.caret.rpart$finalModel), main="RxTB from TB Rpart model", drop_terminal=F)
-rpartmirs<-labels(fit.caret.rpart$finalModel)[-1]
-rpartmirs<- gsub("<.*","", rpartmirs)
-rpartmirs<- unique(gsub(">.*","", rpartmirs))
+rpartm<-labels(fit.caret.rpart$finalModel)[-1]
+rpartm<- gsub("<.*","", rpartm)
+rpartm<- unique(gsub(">.*","", rpartm))
 
 predrpart2 <- predict(fit.caret.rpart, test)
 
@@ -238,7 +238,6 @@ xgb_tune <- caret::train(
   tuneGrid = tune_grid,
   method = "xgbTree",
   verbose = FALSE
-  #,   scale_pos_weight = (35/21)- 1
 )
 kable(xgb_tune$bestTune, caption = "1st tuning, best parameters")%>% kable_styling(full_width = TRUE)
 tune_grid2 <- expand.grid(
@@ -259,7 +258,6 @@ xgb_tune2 <- caret::train(
   tuneGrid = tune_grid2,
   method = "xgbTree",
   verbose = TRUE
-  #,  scale_pos_weight = (35/21) -1
 )
 
 kable(xgb_tune2$bestTune, caption = "2nd tuning, best parameters")%>% kable_styling(full_width = TRUE)
@@ -268,9 +266,9 @@ tune_grid3 <- expand.grid(
   eta = 0.05,
   max_depth = xgb_tune2$bestTune$max_depth,
   gamma = 0,
-  colsample_bytree = c(0.4, 0.6, 0.8, 1.0),
+  colsample_bytree = seq(from = 0, to = 1, by = 0.1),
   min_child_weight = xgb_tune2$bestTune$min_child_weight,
-  subsample = c(0.5, 0.75, 1.0)
+  subsample = seq(from = 0, to = 1, by = 0.1)
 )
 
 set.seed(25)
@@ -289,7 +287,7 @@ tune_grid4 <- expand.grid(
   nrounds = nrounds,
   eta = 0.05,
   max_depth = xgb_tune3$bestTune$max_depth,
-  gamma = c(0,0.05, 0.1, 0.5, 0.7, 0.9, 1),
+  gamma = seq(from = 0, to = 1, by = 0.05),
   colsample_bytree = xgb_tune3$bestTune$colsample_bytree,
   min_child_weight = xgb_tune2$bestTune$min_child_weight,
   subsample = xgb_tune3$bestTune$subsample
@@ -303,13 +301,12 @@ xgb_tune4 <- caret::train(
   tuneGrid = tune_grid4,
   method = "xgbTree",
   verbose = TRUE
-  #,  scale_pos_weight = (35/21) -1
 )
 
 kable(xgb_tune4$bestTune, caption = "4th tuning, best parameters")%>% kable_styling(full_width = TRUE)
 tune_grid5 <- expand.grid(
   nrounds = seq(from = 100, to = 10000, by = 50),
-  eta = c(0.01,0.025,0.05,0.1),
+  eta = seq(from = 0, to = 1, by = 0.05),
   max_depth = xgb_tune3$bestTune$max_depth,
   gamma = xgb_tune4$bestTune$gamma,
   colsample_bytree = xgb_tune3$bestTune$colsample_bytree,
@@ -325,264 +322,25 @@ xgb_tune5 <- caret::train(
   tuneGrid = tune_grid5,
   method = "xgbTree",
   verbose = TRUE
-  #,  scale_pos_weight = (35/21) -1
 )
 
 kable(xgb_tune5$bestTune, caption = "5th tuning, best parameters")%>% kable_styling(full_width = TRUE)
 xgblabels <- ifelse(labels == "RxTB", 1,0)
 xgb_final<- xgboost(data = train1, label = xgblabels, nrounds = xgb_tune5$bestTune$nrounds, objective = "binary:logistic", max_depth = xgb_tune5$bestTune$max_depth, eta = xgb_tune5$bestTune$eta, min_child_weight = xgb_tune5$bestTune$min_child_weight, verbose = 0)
 importance_final<- xgb.importance(feature_names = colnames(train1), model = xgb_final)
-xgb_mirs<- importance_final[importance_final$Gain>0.05,]
-kable(xgb_mirs, caption = "Important Features (Gain > 0.05)")%>% kable_styling(full_width = TRUE)
-gg<- xgb.ggplot.importance(importance_matrix = xgb_mirs)
+xgb_ms<- importance_final[importance_final$Gain>0.05,]
+kable(xgb_ms, caption = "Important Features (Gain > 0.05)")%>% kable_styling(full_width = TRUE)
+gg<- xgb.ggplot.importance(importance_matrix = xgb_ms)
 gg+ggplot2::theme(legend.position = "none", text = element_text(size = 22), axis.text = element_text(size = 18))
 xgbpredictfinal<- predict(xgb_tune5, validation)
 xgbpredictfinal_probs<- predict(xgb_tune5, validation, type = "prob")
 confusionMatrix(xgbpredictfinal, as.factor(test$diagnosis), positive = "RxTB")
-setAshort<- train[,c("diagnosis",xgb_mirs$Feature)]
-setBshort<- test[,c("diagnosis",xgb_mirs$Feature)]
+setAshort<- train[,c("diagnosis",xgb_ms$Feature)]
+setBshort<- test[,c("diagnosis",xgb_ms$Feature)]
 train.short<- data.matrix(setAshort[-1])
 validation.short<- data.matrix(setBshort[-1])
 labels<- setAshort$diagnosis 
 setBshort$diagnosis <- test$diagnosis
-
-#Set up XGBoost with default hyperparameters
-grid_default <- expand.grid(
-  nrounds = 100,
-  max_depth = 6,
-  eta = 0.3,
-  gamma = 0,
-  colsample_bytree = 1,
-  min_child_weight = 1,
-  subsample = 1
-)
-
-train_control <- caret::trainControl(
-  method = "none",
-  verboseIter = FALSE, # no training log
-  allowParallel = TRUE 
-)
-
-xgb_base_short<- caret::train( 
-  x = train.short,
-  y = as.factor(labels),
-  trControl = train_control,
-  tuneGrid = grid_default,
-  method = "xgbTree",
-  verbose = TRUE
-)
-xgbpredict_base_short<- predict(xgb_base_short, validation.short)
-confusionMatrix(xgbpredict_base_short, as.factor(setBshort$diagnosis), positive = "RxTB")
-nrounds<- seq(from = 100, to =1000, by = 50)
-#tune using caret
-tune_grid <- expand.grid(
-  #nrounds = seq(from = 100, to = 1000, by = 50),
-  nrounds = nrounds,
-  eta = c(0.025, 0.05, 0.1, 0.2, 0.3),
-  max_depth = c(1, 2, 3, 4, 5, 6),
-  gamma = 0,
-  colsample_bytree = 1,
-  min_child_weight = 1,
-  subsample = 1
-)
-
-set.seed(25)
-tune_control <- caret::trainControl(
-  method = "repeatedcv", # cross-validation
-  number = 10, # with n folds
-  repeats = 10, #the no. of complete sets of folds to compute
-  #index = createFolds(tr_treated$Id_clean), # fix the folds
-  verboseIter = FALSE, # no training log
-  allowParallel = TRUE,
-  savePredictions = TRUE
-)
-
-set.seed(25)
-xgb_tune_short <- caret::train(
-  x = train.short,
-  y = as.factor(labels),
-  trControl = tune_control,
-  tuneGrid = tune_grid,
-  method = "xgbTree",
-  verbose = TRUE
-)
-
-kable(xgb_tune_short$bestTune, caption = "1st tuning, best parameters")%>% kable_styling(full_width = TRUE)
-tune_grid2_short <- expand.grid(
-  nrounds = nrounds,
-  eta = xgb_tune_short$bestTune$eta,
-  max_depth = c(xgb_tune_short$bestTune$max_depth -1, xgb_tune_short$bestTune$max_depth, xgb_tune_short$bestTune$max_depth +1),
-  gamma = 0,
-  colsample_bytree = 1,
-  min_child_weight = c(1,2,3,4),
-  subsample = 1
-)
-
-set.seed(25)
-xgb_tune2_short <- caret::train(
-  x = train.short,
-  y = as.factor(labels),
-  trControl = tune_control,
-  tuneGrid = tune_grid2_short,
-  method = "xgbTree",
-  verbose = TRUE
-)
-
-kable(xgb_tune2_short$bestTune, caption = "2nd tuning, best parameters")%>% kable_styling(full_width = TRUE)
-tune_grid3_short <- expand.grid(
-  nrounds = nrounds,
-  eta = xgb_tune_short$bestTune$eta,
-  max_depth = xgb_tune2_short$bestTune$max_depth,
-  gamma = 0,
-  colsample_bytree = c(0.4, 0.6, 0.8, 1.0),
-  min_child_weight = xgb_tune2_short$bestTune$min_child_weight,
-  subsample = c(0.5, 0.75, 1.0)
-)
-
-set.seed(25)
-xgb_tune3_short <- caret::train(
-  x = train.short,
-  y = as.factor(labels),
-  trControl = tune_control,
-  tuneGrid = tune_grid3_short,
-  method = "xgbTree",
-  verbose = TRUE
-)
-
-kable(xgb_tune3_short$bestTune, caption = "3rd tuning, best parameters")%>% kable_styling(full_width = TRUE)
-tune_grid4_short <- expand.grid(
-  nrounds = nrounds,
-  eta = xgb_tune_short$bestTune$eta,
-  max_depth = xgb_tune3_short$bestTune$max_depth,
-  gamma = c(0,0.05, 0.1, 0.5, 0.7, 0.9, 1),
-  colsample_bytree = xgb_tune3_short$bestTune$colsample_bytree,
-  min_child_weight = xgb_tune2_short$bestTune$min_child_weight,
-  subsample = xgb_tune3_short$bestTune$subsample
-)
-
-set.seed(25)
-xgb_tune4_short <- caret::train(
-  x = train.short,
-  y = as.factor(labels),
-  trControl = tune_control,
-  tuneGrid = tune_grid4_short,
-  method = "xgbTree",
-  verbose = TRUE
-)
-
-kable(xgb_tune4_short$bestTune, caption = "4th tuning, best parameters")%>% kable_styling(full_width = TRUE)
-tune_grid5_short <- expand.grid(
-  nrounds = seq(from = 100, to = 10000, by = 50),
-  eta = c(0.01,0.025,0.05,0.1),
-  max_depth = xgb_tune3_short$bestTune$max_depth,
-  gamma = xgb_tune4_short$bestTune$gamma,
-  colsample_bytree = xgb_tune3_short$bestTune$colsample_bytree,
-  min_child_weight = xgb_tune2_short$bestTune$min_child_weight,
-  subsample = xgb_tune3_short$bestTune$subsample
-)
-
-set.seed(25)
-xgb_tune5_short <- caret::train(
-  x = train.short,
-  y = as.factor(labels),
-  trControl = tune_control,
-  tuneGrid = tune_grid5_short,
-  method = "xgbTree",
-  verbose = TRUE
-)
-
-kable(xgb_tune5_short$bestTune, caption = "5th tuning, best parameters")%>% kable_styling(full_width = TRUE)
-final_grid_short <- expand.grid(
-  nrounds = xgb_tune5_short$bestTune$nrounds,
-  eta = xgb_tune5_short$bestTune$eta,
-  max_depth = xgb_tune5_short$bestTune$max_depth,
-  gamma = xgb_tune5_short$bestTune$gamma,
-  colsample_bytree = xgb_tune5_short$bestTune$colsample_bytree,
-  min_child_weight = xgb_tune5_short$bestTune$min_child_weight,
-  subsample = xgb_tune5_short$bestTune$subsample
-)
-
-set.seed(25)
-tune_control_f <- caret::trainControl(
-  method = "repeatedcv", # cross-validation
-  number = 10, # with n folds
-  repeats = 10, #the no. of complete sets of folds to compute
-  #index = createFolds(tr_treated$Id_clean), # fix the folds
-  verboseIter = FALSE, # no training log
-  allowParallel = TRUE,
-  savePredictions = TRUE,
-  classProbs = TRUE
-)
-set.seed(25)
-xgb_tune_final_short <- caret::train(
-  x = train.short,
-  y = as.factor(labels),
-  trControl = tune_control_f,
-  tuneGrid = final_grid_short,
-  method = "xgbTree",
-  verbose = TRUE
-)
-
-xgbpredictfinalshort<- predict(xgb_tune_final_short, validation.short)
-XGBInterim<- confusionMatrix(xgbpredictfinalshort, as.factor(test$diagnosis), positive = "RxTB")
-XGBInterim
-#mir in any feature selection method
-all.mirs<- unique(c(lasso.model$rowname[-1],multi.boruta.mirs, as.character(rpartmirs), xgb_mirs$Feature))
-#miRs in at least 2 selection methods
-mirnames<- duplicated(c(lasso.model$rowname[-1],multi.boruta.mirs, rpartmirs, xgb_mirs$Feature))
-mirnames<- c(lasso.model$rowname[-1],multi.boruta.mirs, rpartmirs, xgb_mirs$Feature)[mirnames] %>% unique(.)
-#ROC curves for IPAH
-library(pROC)
-roc.res.i <- list()
-for(i in all.mirs){
-  #Save ROC data
-  roc.res.i[[i]] <- roc(dataset$  , dataset[,i], plot=F)
-  plot.roc(roc.res.i[[i]], lwd = 5, cex.axis = 1, cex.lab = 1, cex.main = 1, main=paste("ROC for",i))
-}
-
-boruta.split<- split(fit.Boruta$pred, fit.Boruta$pred$Resample)
-parallel::mclapply(1:100, function(d) {
-  pROC::auc(pROC::roc(predictor = boruta.split[[d]]$RxTB, response = boruta.split[[d]]$obs))[1]
-}) %>% unlist() %>% hist(main = paste("Boruta CV mean AUC:", round(mean(.),2)))
-
-Boruta.perf<- predict(fit.Boruta, tree.Boruta[-1], type= "prob")
-Boruta.pred<- prediction(Boruta.perf$RxTB, tree.Boruta$diagnosis)
-Boruta.perfs<- ROCR::performance(Boruta.pred,"tpr","fpr")
-Boruta.sens<- ROCR::performance(Boruta.pred,"sens","spec")
-Boruta.auc <- pROC::auc(tree.Boruta$diagnosis, Boruta.perf[,2])
-Boruta.aucCI<- pROC::ci.auc(tree.Boruta$diagnosis, Boruta.perf[,2])
-par(mfrow=c(1,2))
-plot(Boruta.perfs, main = paste("AUC:", round(Boruta.auc,2)))
-plot(Boruta.sens)
-Boruta.aucCI
-separatesplittoconfusion<- function(newlist, splits, d) {
-  newlist[[d]]<- confusionMatrix(splits[[d]]$pred, splits[[d]]$obs, positive = "RxTB")
-}
-confusionaccuracy<- function(x){
-  (x$table[1]+x$table[4])/(x$table[1]+x$table[2]+x$table[3]+x$table[4])
-}
-confusionsensitivity<- function(x){
-  x$table[1]/(x$table[1]+x$table[2])
-}
-confusionspecificity<- function(x){
-  (x$table[4]/(x$table[3]+x$table[4]))
-}
-confusionPPV<- function(x){
-  (x$table[1]/(x$table[1]+x$table[3]))
-}
-confusionNPV<- function(x){
-  (x$table[4]/(x$table[2]+x$table[4]))
-}
-borutaconfusions<- list()
-borutaconfusions<- lapply(1:100, separatesplittoconfusion, newlist = borutaconfusions, splits = boruta.split)
-
-cvborutaaccuracy<- unlist(lapply(borutaconfusions, confusionaccuracy))
-cvborutasensitivity<- unlist(lapply(borutaconfusions, confusionsensitivity))
-cvborutaspecificity<- unlist(lapply(borutaconfusions, confusionspecificity))
-cvborutaPPV <- unlist(lapply(borutaconfusions, confusionPPV))
-cvborutaNPV<- unlist(lapply(borutaconfusions, confusionNPV))
-summary(cvborutaaccuracy)
-
 Boruta.perf<- predict(fit.Boruta, tree.Boruta[-1], type= "prob")
 rpart.perf<- predict(fit.caret.rpart, test[-37], type= "prob")
 LASSO.probs.min <- predict(LASSO.min, newdata=val.LASSO[-37], type = "prob")
@@ -594,22 +352,6 @@ Ensemble.pred<-prediction(totalprobs$Mean, totalprobs$group)
 Ensemble.perfs<- ROCR::performance(Ensemble.pred, "tpr", "fpr")
 kable(totalprobs)  %>% kable_styling(full_width = TRUE)
 table(totalprobs$EnsemblePreds, totalprobs$group)
-
-
-RFvars<-varImp(fit.Boruta)[[1]]%>% rownames_to_column() %>% select(miR = rowname, RFIMP = Overall)
-rpartvars<- varImp(fit.caret.rpart)[[1]] %>% filter(Overall > 0) %>% rownames_to_column() %>% select(miR = rowname, rpartIMP = Overall)
-LASSOvars<- varImp(LASSO.min)[[1]]  %>% filter(Overall > 0)%>% rownames_to_column() %>% select(miR = rowname, LASSOIMP = Overall)
-XGBvars<- varImp(xgb_tune_final_short)[[1]]%>% rownames_to_column() %>% select(miR = rowname, XGBIMP = Overall)
-n<- max(dim(RFvars)[1], dim(rpartvars)[1], dim(LASSOvars)[1], dim(XGBvars)[1])
-allimps <- dplyr::full_join(x = RFvars, y=  rpartvars) %>% full_join(x=., y=LASSOvars) %>% full_join(x=., XGBvars)
-plot(varImp(fit.Boruta))
-plot(varImp(fit.caret.rpart))
-plot(varImp(LASSO.min))
-plot(varImp(xgb_tune_final_short))
-reshaped<- melt(allimps, id.vars = 1)
-ggplot(reshaped, aes(x=miR, y = value)) + geom_bar(aes(fill=variable),stat="identity",position="dodge")  + theme(axis.text.x=element_text(angle=90, vjust=0.5, size = 12), panel.background = element_blank(), panel.grid = element_line(colour="grey")) + labs(x="", y="Importance", size=12) + scale_fill_brewer(palette = "RdYlBu") 
-ggplot(reshaped, aes(x=miR, y = value)) + geom_bar(aes(fill=variable),stat="identity")  + theme(axis.text.x=element_text(angle=90, vjust=0.5, size = 12), panel.background = element_blank(), panel.grid = element_line(colour="grey")) + labs(x="", y="Importance", size=12) +  scale_fill_manual(name = "", labels = c("Random Forest", "rpart", "LASSO", "XGBoost"), values = c("dark red", "tomato2", "midnight blue", "cornflowerblue"))
-setwd()
 setwd("D:/个人材料/多肽芯片/原始数据/肺结核原始数据及分析结果/原始数据/MS/重新分析/chemical-gen2-pathway-")
 data=read.table("TB treatment monitor1.csv",sep=",",row.names=1,header=T)
 group=read_xlsx("group_GSE.xlsx",sheet=1)
@@ -636,8 +378,6 @@ table(Diff$logFC>1,Diff$P.Value<0.05)
 table(Diff$logFC< -1,Diff$P.Value<0.05)
 write.csv(exprSet,"GSE92324表达矩阵.csv")
 write.csv(Diff,"GSE92324表达数据分析.csv")
-
-
 ####GSVA分析
 library(GSVA)
 library(GSEABase)
