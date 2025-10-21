@@ -1,51 +1,69 @@
+# =============================================================================
+# Data Loading and Preprocessing
+# =============================================================================
 setwd("./")
 data = read.table("MS.csv",sep=",",header=T,row.names=1)
+#### Scale all features
 data[,1:99] = scale(data[,1:99])
-train_index <- createDataPartition(DF$diagnosis, p = 0.7, list = FALSE, 
-                                   groups = min(length(unique(df$diagnosis)), 5))
-train <- DF[train_index, ]
-validation <- DF[-train_index, ]
+# =============================================================================
+# Data Partitioning
+# =============================================================================
+#### Split data into training (70%) and validation (30%) sets
+train_index <- createDataPartition(data$diagnosis, p = 0.7, list = FALSE, 
+                                   groups = min(length(unique(data$diagnosis)), 5))
+train <- data[train_index, ]
+test <- data[-train_index, ]
+# =============================================================================
+# Feature Selection with Boruta Algorithm
+# =============================================================================
 library("Boruta")
 library(pacman)
 p_load("kableExtra","caret","tidyverse","reshape2","e1071","JamesTools","OptimalCutpoints","Boruta","ggplot2","randomForest","ROCR","rpart","party","rpart.plot","partykit","glmnet","xgboost","Ringo", "parallel", "doParallel", "DMwR", "cowplot", "pROC", "readxl")
 train$diagnosis <- as.factor(train$diagnosis)
 multi.boruta<- list()
+# Define function for parallel Boruta execution
 multi<- function(i){
   fit.boruta <- Boruta(factor(diagnosis)~., data=train, maxRuns = 300, pValue = 0.01)
   boruta.df <- data.frame(attStats(fit.boruta))
   multi.boruta[[i]] <- rownames(boruta.df[boruta.df$decision =='Confirmed',])
 }
+# Execute Boruta feature selection with 100 iterations
 set.seed(100)
 multi.boruta<- parallel::mclapply(1:100, multi)
-multi.boruta<- as.data.frame(table(unlist(multi.boruta)))#统计100次重复每个特征出现的次数
-multi.boruta.m<- as.character(multi.boruta[which(multi.boruta$Freq>10),1])##设置特征出现次数阈值
+multi.boruta<- as.data.frame(table(unlist(multi.boruta)))  #### Count frequency of each feature across 100 runs
+multi.boruta.m<- as.character(multi.boruta[which(multi.boruta$Freq>10),1])  #### Set frequency threshold for feature selection
 multi.boruta
-multi.boruta=multi.boruta[-14,]
 train$diagnosis <- as.factor(train$diagnosis)
+# Prepare formula and datasets with selected features
 m<- paste(as.vector(multi.boruta.m, mode = "any"), collapse = "+")
 RFm<- as.formula(paste("diagnosis ~ ",m,sep = ""))
 Boruta.data<- train[,c("diagnosis",multi.boruta.m)]
 colnames(test)[37] = "diagnosis"
 tree.Boruta<- test[,c("diagnosis", multi.boruta.mrs)]
-###########运行随机森林
+
+# =============================================================================
+# Random Forest Model Training with Hyperparameter Tuning
+# =============================================================================
+# Configure repeated cross-validation settings
 control<- trainControl(method = 'repeatedcv',
                        number = 10,
                        repeats = 10, classProbs = TRUE, savePredictions = TRUE)
 metric <- "Accuracy"
-tunegrid <- expand.grid(.mtry=seq(from =1, to =4))
-modellist<- list()
+# Define tuning grid for mtry parameter
+tunegrid <- expand.grid(.mtry=seq(from =1, to =4))  #### mtry- number of variables sampled at each split
+modellist<- list() #### ntree - number of trees to grow
 for (ntree in c(100, 250, 500, 750, 1000, 1250, 1500, 1750, 2000)) {
   set.seed(100)
   fit <- caret::train(RFm, data=Boruta.data, method="rf", metric=metric, tuneGrid=tunegrid, trControl=control, ntree=ntree)
   key <- toString(ntree)
   modellist[[key]] <- fit
 }
-# compare results
 results <- resamples(modellist)
 res<- summary(results)
 res<- as.data.frame(res$statistics$Accuracy)
 summary(results)
-ntree = as.numeric(rownames(res)[which(res$Mean == max(res$Mean))])[1]###优化mtry参数
+ntree = as.numeric(rownames(res)[which(res$Mean == max(res$Mean))])[1] #### Optimize mtry
+# Retrain model with optimized ntree parameter
 set.seed(100)
 tunegrid <- expand.grid(.mtry=seq(from = 1, to=4, by = 1))
 modellist<- list()
@@ -55,6 +73,7 @@ control<- trainControl(method = 'repeatedcv',
 set.seed(100)
 fit <- caret::train(RFm, data=Boruta.data, method="rf", metric="Accuracy", tuneGrid=tunegrid, trControl=control, ntree=ntree)
 fit
+# Train final random forest model with optimized parameters
 tunegrid <- expand.grid(.mtry=fit$bestTune$mtry)
 control<- trainControl(method = 'repeatedcv',
                        number = 10,
@@ -62,124 +81,137 @@ control<- trainControl(method = 'repeatedcv',
                        savePredictions = TRUE,
                        classProbs = TRUE)
 fit.Boruta <- caret::train(RFm, data=Boruta.data, method="rf", metric="Accuracy", tuneGrid=tunegrid, trControl=control, ntree=ntree)
+# Generate predictions on training set
 RFBoruta.train <- predict(fit.Boruta, tree.Boruta)
-BorutaInterim<- confusionMatrix(as.factor(RFBoruta.train), as.factor(tree.Boruta$diagnosis), positive = "RxTB")
+# Calculate performance metrics on training set
+BorutaInterim<- confusionMatrix(as.factor(RFBoruta.train), as.factor(tree.Boruta$diagnosis), positive = "RxTB") #### Plot confusion matrix on training data
 BorutaInterim
 pre = RFBoruta.train
+# Predict on validation set using the final random forest model
 RFBoruta.train <- predict(fit.Boruta, tree.Boruta,type="prob")
 df1 = data.frame(RFBoruta.train)
 df1$pre = pre
 df1$obs = test$diagnosis
-write.csv(df1,"RF-test-pre-原始数据.csv")
+write.csv(df1,"RF-test-pre.csv")
+DF = read.table("./train-RF-pre.csv",sep=",",header=T)
+confusionMatrix(as.factor(DF$pred), as.factor(DF$obs), positive = "RxTB") #### Plot confusion matrix on validation data
 
-DF = read.table("RF-随机森林/train-RF-pre-原始数据.csv",sep=",",header=T)
-confusionMatrix(as.factor(DF$pred), as.factor(DF$obs), positive = "RxTB")
-df1 = read.table("RF-随机森林/RF-test-pre-SMOTE.csv",sep=",",header=T, row.names=1)
-confusionMatrix(as.factor(df1$pre.1), as.factor(df1$diagnosis.1), positive = "RxTB")
-#####################################################Rpart
-#####################################################Rpart
-#####################################################Rpart
-#train control
+# =============================================================================
+# Rpart Decision Tree Analysis with Cross-Validation
+# =============================================================================
+# Configure repeated cross-validation settings
 tc <- trainControl(method="repeatedcv", number=10, repeats = 10, classProbs=TRUE, summaryFunction = twoClassSummary, savePredictions = TRUE)
-#maxcompete
-
 set.seed(20)
+# Train decision tree model with specified parameters
 fit.caret.rpart <- caret::train(diagnosis ~ ., data=train, method='rpart', metric="ROC", trControl=tc, control=rpart.control(minsplit=2, minbucket=3, surrogatestyle = 1, maxcompete = 0)) 
+# Extract optimal tuning parameters
 fit.caret.rpart$bestTune
+# Plot party-style decision tree
 prp(fit.caret.rpart$finalModel, main="RxTB from TB Rpart model", extra=2, varlen=0)
 plot(as.party(fit.caret.rpart$finalModel), main="RxTB from TB Rpart model", drop_terminal=F)
+# Extract and clean important features from the model
 rpartm<-labels(fit.caret.rpart$finalModel)[-1]
 rpartm<- gsub("<.*","", rpartm)
 rpartm<- unique(gsub(">.*","", rpartm))
-
+# Model Prediction and Performance Assessment
 predrpart2 <- predict(fit.caret.rpart, test)
-
+# Create prediction results table
 fit.preds.table.Rpart<- cbind(rownames(test),predrpart2,as.character(test$diagnosis))
 fit.preds.table.Rpart<- as.data.frame(fit.preds.table.Rpart)
 colnames(fit.preds.table.Rpart) <- c("sample","fit.preds","diagnosis")
+#Calculate model performance metrics
 test$diagnosis=as.factor(test$diagnosis)
 RpartInterim<- confusionMatrix(predrpart2, test$diagnosis, positive = "RxTB")
 RpartInterim
 
-####预测概率值
+# Generate class probability predictions
 predrpart2 <- predict(fit.caret.rpart, test)
 pre = predrpart2
 predrpart2 <- predict(fit.caret.rpart, test,type="prob")
 predrpart2 = data.frame(predrpart2)
 predrpart2$pre=pre
 predrpart2$obs=test$diagnosis
-
-write.csv(predrpart2,"rpart-test-pre-原始数据.csv")
-write.csv(DF,"rpart-train-pre-原始数据.csv")
-DF = read.table("rpart-train-pre-原始数据.csv",sep=",",header=T,row.names=1)
+write.csv(predrpart2,"rpart-test-pre.csv")
+write.csv(DF,"rpart-train-pre.csv")
+DF = read.table("rpart-train-pre.csv",sep=",",header=T,row.names=1)
 DF$obs=as.factor(DF$obs)
 DF$pred=as.factor(DF$pred)
 confusionMatrix(DF$pred,DF$obs, positive = "RxTB")
 
-###绘制PR曲线
+# Generate Precision-Recall curve
 library(PRROC)
 df1 = read.table("Rpart-test-pre-SMOTE.csv",sep=",",header=T,row.names=1)
 pr = pr.curve(scores.class0 = df1[,1], weights.class0 = df1[,5],curve = T)
 plot(pr, main="PR Curve lasso", col="#1c61b6", lwd=2)
 
-######################################################################lasso
-######################################################################lasso
-######################################################################lasso
+# =============================================================================
+# LASSO Regression Analysis with Cross-Validation
+# =============================================================================
+# Perform 10-fold cross-validation for LASSO regression
 fit.glmcv <- cv.glmnet(x=as.matrix(train[-37]), y=as.factor(train$diagnosis), alpha=1, family='binomial', nfolds=10)
 #summary(fit.glmcv)
+# Alternative CV using misclassification error as metric
 other.glmcv <- cv.glmnet(x=as.matrix(train[-37]), y=as.factor(train$diagnosis), alpha=1, family='binomial', nfolds=10, type.measure = "class")
+# Extract optimal lambda value
 model.lambda <- fit.glmcv$lambda.min
-
+# Plot cross-validation results
 plot(fit.glmcv, cex.axis=1, cex.lab=1,cex.main=1)
+# Display optimal lambda value
 paste("lambda value:", fit.glmcv$lambda.min)
+# Define tuning grid with optimal lambda
 tuneLASSO<- expand.grid(.alpha = 1, .lambda = fit.glmcv$lambda.min)
+# Train final LASSO model using caret
 LASSO.min<- caret::train(diagnosis ~ ., data = train, method = "glmnet", trControl = control, family = 'binomial', tuneGrid = tuneLASSO)
+# Extract non-zero coefficients from final model
 lasso.model<- coef(LASSO.min$finalModel, LASSO.min$bestTune$lambda) %>% as.matrix() %>% as.data.frame() %>% rownames_to_column() %>% setNames(c("rowname", "coefficient")) %>% filter(abs(`coefficient`) >0)
-
+# Create dataset with LASSO-selected features
 ml.Spear.LASSO <- cbind("group" =train$diagnosis, train[,colnames(train) %in% lasso.model$rowname])
-
+# Report number of selected features
 paste("Number of features in LASSO model:",length(lasso.model$rowname)-1)
+# Display selected features and coefficients
 kable(lasso.model, caption = "features retained by LASSO") %>% kable_styling(full_width = TRUE)
+# Prepare test set with matching features
 val.LASSO<- test[, colnames(test) %in% colnames(train)]
+# Generate class predictions
 LASSO.pred.min <- predict(LASSO.min, newdata=val.LASSO)
 predicted.classes<-as.character(LASSO.pred.min)
+# Create prediction results table
 fit.preds.table.LASSO<- as.data.frame(cbind(as.character(rownames(test)),as.character(predicted.classes),as.character(test$diagnosis)))
 colnames(fit.preds.table.LASSO) <- c("sample","LASSO","diagnosis")
+# Calculate confusion matrix and performance metrics
 val.LASSO$diagnosis=as.factor(val.LASSO$diagnosis)
-
 LASSOInterim<- confusionMatrix(LASSO.pred.min,val.LASSO$diagnosis, positive = "RxTB")
 LASSOInterim
-###LASSO预测值
+# Generate class probability predictions
 LASSO.pred.min <- predict(LASSO.min, newdata=val.LASSO)
 pre = LASSO.pred.min
 LASSO.pred.min <- predict(LASSO.min, newdata=val.LASSO,type = "prob")
 LASSO.pred.min=data.frame(LASSO.pred.min)
 LASSO.pred.min$pre=pre
 LASSO.pred.min$obs = val.LASSO$diagnosis
-
-write.csv(LASSO.pred.min,"lasso-test-pre-原始数据.csv")
-write.csv(DF,"lasso-train-pre-原始数据.csv")
+write.csv(LASSO.pred.min,"lasso-test-pre.csv")
+write.csv(DF,"lasso-train-pre.csv")
+# Calculate performance metrics on validation set
 confusionMatrix(DF$pred,DF$obs, positive = "RxTB")
 
-DF = read.table("glmnet/lasso-train-pre-SMOTE.csv",sep = ",",header = T, row.names = 1)
-reportROC(gold=DF$obs.1,
-          predictor=DF$RxTB,
-          important="se",
-          plot=TRUE)
 
 
-#################################################################XGBOOST
-#################################################################XGBOOST
-#################################################################XGBOOST
+# =============================================================================
+# XGBoost Model Setup and Data Preparation
+# =============================================================================
 library(xgboost)
+# Prepare feature matrices by removing outcome column
 train1<- train[-37]
 train1<- data.matrix(train1)
 validation<- test[-37]
 validation<- data.matrix(validation)
-
+# Extract outcome labels
 labels<- train$diagnosis
 
-#Set up XGBoost with default hyperparameters
+# =============================================================================
+# Baseline XGBoost Model with Default Parameters
+# =============================================================================
+# Define default hyperparameter grid
 grid_default <- expand.grid(
   nrounds = 100,
   max_depth = 6,
@@ -189,12 +221,13 @@ grid_default <- expand.grid(
   min_child_weight = 1,
   subsample = 1
 )
-
+# Configure training control without cross-validation
 train_control <- caret::trainControl(
   method = "none",
   verboseIter = FALSE, # no training log
   allowParallel = TRUE 
 )
+# Train baseline XGBoost model
 xgb_base<- caret::train( 
   x = train1,
   y = as.factor(labels),
@@ -204,11 +237,15 @@ xgb_base<- caret::train(
   verbose = TRUE,
   scale_pos_weight = (178/89) #(Total no. samples / no. positive in groupA)
 )
-
+# Evaluate baseline model performance
 xgbpredict_base<- predict(xgb_base, validation)
 confusionMatrix(xgbpredict_base, as.factor(test$diagnosis), positive = "RxTB")
+# =============================================================================
+# Hyperparameter Tuning - Round 1: nrounds and max_depth
+# =============================================================================
+# Define nrounds sequence
 nrounds<- seq(from = 100, to =1000, by = 50)
-#tune using caret
+# Create first tuning grid
 tune_grid <- expand.grid(
   #nrounds = seq(from = 100, to = 1000, by = 20),
   nrounds = nrounds,
@@ -219,7 +256,7 @@ tune_grid <- expand.grid(
   min_child_weight = 1,
   subsample = 1
 )
-
+# Configure repeated cross-validation
 set.seed(25)
 tune_control <- caret::trainControl(
   method = "repeatedcv", # cross-validation
@@ -229,7 +266,7 @@ tune_control <- caret::trainControl(
   verboseIter = FALSE, # no training log
   allowParallel = TRUE 
 )
-
+# Perform first round of hyperparameter tuning
 set.seed(25)
 xgb_tune <- caret::train(
   x = train1,
@@ -239,7 +276,12 @@ xgb_tune <- caret::train(
   method = "xgbTree",
   verbose = FALSE
 )
+# Display best parameters from first tuning round
 kable(xgb_tune$bestTune, caption = "1st tuning, best parameters")%>% kable_styling(full_width = TRUE)
+# =============================================================================
+# Hyperparameter Tuning - Round 2: min_child_weight
+# =============================================================================
+# Refine tuning grid based on previous results
 tune_grid2 <- expand.grid(
   nrounds = nrounds,
   eta = 0.05,
@@ -249,7 +291,7 @@ tune_grid2 <- expand.grid(
   min_child_weight = c(0,1,2,3,4),
   subsample = 1
 )
-
+# Perform second round of hyperparameter tuning
 set.seed(25)
 xgb_tune2 <- caret::train(
   x = train1,
@@ -259,8 +301,12 @@ xgb_tune2 <- caret::train(
   method = "xgbTree",
   verbose = TRUE
 )
-
+# Display best parameters from second tuning round
 kable(xgb_tune2$bestTune, caption = "2nd tuning, best parameters")%>% kable_styling(full_width = TRUE)
+# =============================================================================
+# Hyperparameter Tuning - Round 3: colsample_bytree and subsample
+# =============================================================================
+# Further refine subsampling parameters
 tune_grid3 <- expand.grid(
   nrounds = nrounds,
   eta = 0.05,
@@ -270,7 +316,7 @@ tune_grid3 <- expand.grid(
   min_child_weight = xgb_tune2$bestTune$min_child_weight,
   subsample = seq(from = 0, to = 1, by = 0.1)
 )
-
+# Perform third round of hyperparameter tuning
 set.seed(25)
 xgb_tune3 <- caret::train(
   x = train1,
@@ -281,8 +327,12 @@ xgb_tune3 <- caret::train(
   verbose = TRUE
   #,   scale_pos_weight = (35/21) -1
 )
-
+# Display best parameters from third tuning round
 kable(xgb_tune3$bestTune, caption = "3rd tuning, best parameters")%>% kable_styling(full_width = TRUE)
+# =============================================================================
+# Hyperparameter Tuning - Round 4: gamma (regularization)
+# =============================================================================
+# Tune gamma parameter for regularization
 tune_grid4 <- expand.grid(
   nrounds = nrounds,
   eta = 0.05,
@@ -292,7 +342,7 @@ tune_grid4 <- expand.grid(
   min_child_weight = xgb_tune2$bestTune$min_child_weight,
   subsample = xgb_tune3$bestTune$subsample
 )
-
+# Perform fourth round of hyperparameter tuning
 set.seed(25)
 xgb_tune4 <- caret::train(
   x = train1,
@@ -302,8 +352,12 @@ xgb_tune4 <- caret::train(
   method = "xgbTree",
   verbose = TRUE
 )
-
+# Display best parameters from fourth tuning round
 kable(xgb_tune4$bestTune, caption = "4th tuning, best parameters")%>% kable_styling(full_width = TRUE)
+# =============================================================================
+# Hyperparameter Tuning - Round 5: nrounds and eta (final refinement)
+# =============================================================================
+# Final tuning with expanded search ranges
 tune_grid5 <- expand.grid(
   nrounds = seq(from = 100, to = 10000, by = 50),
   eta = seq(from = 0, to = 1, by = 0.05),
@@ -313,7 +367,7 @@ tune_grid5 <- expand.grid(
   min_child_weight = xgb_tune2$bestTune$min_child_weight,
   subsample = xgb_tune3$bestTune$subsample
 )
-
+# Perform final round of hyperparameter tuning
 set.seed(25)
 xgb_tune5 <- caret::train(
   x = train1,
@@ -323,36 +377,57 @@ xgb_tune5 <- caret::train(
   method = "xgbTree",
   verbose = TRUE
 )
-
+# Display final optimized parameters
 kable(xgb_tune5$bestTune, caption = "5th tuning, best parameters")%>% kable_styling(full_width = TRUE)
+# =============================================================================
+# Final Model Training and Feature Importance
+# =============================================================================
+# Convert labels to binary format for XGBoost
 xgblabels <- ifelse(labels == "RxTB", 1,0)
+# Train final XGBoost model with optimized parameters
 xgb_final<- xgboost(data = train1, label = xgblabels, nrounds = xgb_tune5$bestTune$nrounds, objective = "binary:logistic", max_depth = xgb_tune5$bestTune$max_depth, eta = xgb_tune5$bestTune$eta, min_child_weight = xgb_tune5$bestTune$min_child_weight, verbose = 0)
+# Calculate and display feature importance
 importance_final<- xgb.importance(feature_names = colnames(train1), model = xgb_final)
 xgb_ms<- importance_final[importance_final$Gain>0.05,]
 kable(xgb_ms, caption = "Important Features (Gain > 0.05)")%>% kable_styling(full_width = TRUE)
+# Visualize feature importance
 gg<- xgb.ggplot.importance(importance_matrix = xgb_ms)
 gg+ggplot2::theme(legend.position = "none", text = element_text(size = 22), axis.text = element_text(size = 18))
+# =============================================================================
+# Model Evaluation on Test Set
+# =============================================================================
+# Generate final predictions
 xgbpredictfinal<- predict(xgb_tune5, validation)
 xgbpredictfinal_probs<- predict(xgb_tune5, validation, type = "prob")
+# Calculate final performance metrics
 confusionMatrix(xgbpredictfinal, as.factor(test$diagnosis), positive = "RxTB")
+# Create datasets with important features only
 setAshort<- train[,c("diagnosis",xgb_ms$Feature)]
 setBshort<- test[,c("diagnosis",xgb_ms$Feature)]
 train.short<- data.matrix(setAshort[-1])
 validation.short<- data.matrix(setBshort[-1])
 labels<- setAshort$diagnosis 
 setBshort$diagnosis <- test$diagnosis
+# Generate predictions from all models
 Boruta.perf<- predict(fit.Boruta, tree.Boruta[-1], type= "prob")
 rpart.perf<- predict(fit.caret.rpart, test[-37], type= "prob")
 LASSO.probs.min <- predict(LASSO.min, newdata=val.LASSO[-37], type = "prob")
 xgbpreds<- predict(xgb_tune_final_short, validation.short, type = "prob")
+# Combine predictions for ensemble analysis
 totalprobs<- data.frame(patientID = rownames(Boruta.perf), group = test$diagnosis, RandomForest = Boruta.perf$RxTB, rpart = rpart.perf$RxTB, LASSO = LASSO.probs.min$RxTB, XGB = xgbpreds$RxTB)
+# Calculate ensemble predictions
 totalprobs <- mutate(totalprobs, Mean = rowMeans(totalprobs[3:6]))
 totalprobs$EnsemblePreds <- ifelse(totalprobs$Mean > 0.5, "RxTB", "TB")
+# Generate ensemble performance metrics
 Ensemble.pred<-prediction(totalprobs$Mean, totalprobs$group) 
 Ensemble.perfs<- ROCR::performance(Ensemble.pred, "tpr", "fpr")
+# Display ensemble results
 kable(totalprobs)  %>% kable_styling(full_width = TRUE)
 table(totalprobs$EnsemblePreds, totalprobs$group)
-setwd("D:/个人材料/多肽芯片/原始数据/肺结核原始数据及分析结果/原始数据/MS/重新分析/chemical-gen2-pathway-")
+# =============================================================================
+# Biomarker validation using public dataset
+# =============================================================================
+setwd("./NCBI/")
 data=read.table("TB treatment monitor1.csv",sep=",",row.names=1,header=T)
 group=read_xlsx("group_GSE.xlsx",sheet=1)
 group1 <- group[group$group %in% c("TB", "W26"), ]
