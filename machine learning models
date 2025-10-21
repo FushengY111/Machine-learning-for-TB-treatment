@@ -1,4 +1,4 @@
-setwd("E:/数据/MS/重新分析/机器学习")
+setwd("./")
 data = read.table("MS.csv",sep=",",header=T,row.names=1)
 data[,1:99] = scale(data[,1:99])
 train_index <- createDataPartition(DF$diagnosis, p = 0.7, list = FALSE, 
