@@ -427,15 +427,23 @@ table(totalprobs$EnsemblePreds, totalprobs$group)
 # =============================================================================
 # Biomarker validation using public dataset
 # =============================================================================
+# Set working directory and load public dataset
 setwd("./NCBI/")
 data=read.table("TB treatment monitor1.csv",sep=",",row.names=1,header=T)
 group=read_xlsx("group_GSE.xlsx",sheet=1)
+# Filter samples for TB and W26 timepoints
 group1 <- group[group$group %in% c("TB", "W26"), ]
 data1=data[,colnames(data) %in% group1$sample]
+# Normalize data and visualize distribution
 exprSet=normalizeBetweenArrays(exprSet)
 boxplot(data1)
+# =============================================================================
+# Differential Expression Analysis
+# =============================================================================
+# Create experimental design matrix
 group2 <- factor(c(rep("control",8), rep("RIF", 10)), levels = c('control', 'RIF'))
 design <- model.matrix(~0+group2)
+# Prepare group information for linear modeling
 group1$W26=group1$group
 group1=data.frame(group1)
 rownames(group1)=group1$sample
@@ -444,40 +452,52 @@ colnames(group1)[1]="TB"
 group1[, 2] <- ifelse(group1[, 2] == "TB", 0, ifelse(group1[, 2] == "W26", 1, NA))
 design=group1
 exprSet=data1
+# Perform differential expression analysis
 compare <- makeContrasts(W26 - TB, levels=design)
 fit <- lmFit(exprSet, design)
 fit <- contrasts.fit(fit, compare)
 fit <- eBayes(fit)
 Diff <- topTable(fit, coef=1, number=Inf)
+# Count significant differentially expressed genes
 table(Diff$logFC>1,Diff$P.Value<0.05)
 table(Diff$logFC< -1,Diff$P.Value<0.05)
-write.csv(exprSet,"GSE92324表达矩阵.csv")
-write.csv(Diff,"GSE92324表达数据分析.csv")
-####GSVA分析
+# Export results
+write.csv(exprSet,"GSE92324.csv")
+write.csv(Diff,"GSE92324.csv")
+# =============================================================================
+# GSVA Pathway Analysis
+# =============================================================================
 library(GSVA)
 library(GSEABase)
+# Load expression data and gene sets
 data=read.xlsx("GSE87017_2016_RoadmapProcessedDataFile.xlsx",sheet=7)
 geneSets <- getGmt("pathway.gmt")
+# Prepare expression matrix
 rownames(data)=data[,2]
 data=data[,-(1:2)]
 data <- as.matrix(data)
-data[,1:ncol(data)]<-as.numeric(unlist(data[,1:ncol(data)]))#####非常重要，将字符型数据转换为数字型。
+# Convert character data to numeric (critical step)
+data[,1:ncol(data)]<-as.numeric(unlist(data[,1:ncol(data)]))
+# Perform GSVA analysis
 mygeneset = as.data.frame(geneSets)
 es_es <- gsva(data, geneSets, min.sz=5, max.sz=1000, verbose=FALSE, parallel.sz=1)
 es = gsva(data, geneSets,min.sz=5, max.sz=1000,mx.diff=FALSE, verbose=FALSE, parallel.sz=1,method='gsva',kcdf="Gaussian")
 es_es=data.frame(es)
 
-###计算一致性
+# =============================================================================
+# Feature Selection Consensus Analysis
+# =============================================================================
+# Load feature selection results from different methods
 set.seed(123)
-N_features <- 100  # 总特征数
+N_features <- 100 
 methods <- c("LASSO", "RF", "SVM", "XGB")
-df=read.xlsx("E:/数据/MS/重新分析/机器学习/paper/BIB/一致性分析.xlsx",sheet=1)
-
+df=read.xlsx("./feature selection.xlsx",sheet=1)
+# Extract features selected by each method
 Boruta_features <- df[1:28,2]
 Rpart_features <- df[1:4,3]
 XGBoost_features <- df[1:22,4]
 LASSO_features <- df[1:5,5]
-
+# Extract features selected by each method
 all_unique_features <- unique(c(Boruta_features, Rpart_features, XGBoost_features, LASSO_features))
 binary_matrix <- data.frame(
   Feature = all_unique_features,
@@ -489,13 +509,19 @@ binary_matrix <- data.frame(
 head(binary_matrix)
 rating_matrix <- as.matrix(binary_matrix[, -1])
 rownames(rating_matrix) <- binary_matrix$Feature
+# =============================================================================
+# Inter-Method Agreement Assessment
+# =============================================================================
+# Calculate Fleiss' Kappa for multiple raters
 kappa_result <- kappam.fleiss(rating_matrix, detail = TRUE)
 print(kappa_result)
-common_features <- sample(which(rowSums(feature_selection[, -1]) == 0), 3)  # 选3个原本未被选中的特征
+# =============================================================================
+# Jaccard Similarity Analysis
+# =============================================================================
+# Define Jaccard similarity function
+common_features <- sample(which(rowSums(feature_selection[, -1]) == 0), 3)
 feature_selection[common_features, -1] <- 1  
-
-
-# 计算Jaccard相似性矩阵
+# Define Jaccard similarity function
 jaccard_matrix <- function(df) {
   methods <- colnames(df)
   n <- length(methods)
@@ -512,19 +538,20 @@ jaccard_matrix <- function(df) {
   }
   return(jaccard)
 }
-
+# Calculate Jaccard similarity matrix
 jaccard <- jaccard_matrix(feature_selection[, -1])  # 排除feature_id列
 print(jaccard)
-# 统计被k种方法选中的特征数量
+# Count how many methods selected each feature
 consensus_count <- rowSums(feature_selection[, -1])
-table(consensus_count)  # 查看分布
-
-# 提取被所有4种方法选中的特征（强共识）
+table(consensus_count) 
+# Extract features selected by all methods (strong consensus)
 strong_consensus <- feature_selection$feature_id[consensus_count == 4]
 print(strong_consensus)
+# =============================================================================
+# Pairwise Method Comparison
+# =============================================================================
 library(irr)
-
-# 计算所有方法两两之间的Kappa
+# Calculate pairwise Cohen's Kappa
 kappa_results <- list()
 pairs <- combn(methods, 2, simplify = FALSE)
 head(rating_matrix)
@@ -534,19 +561,16 @@ for (pair in pairs) {
   Cohen. kappa(rating_matrix[,1],rating_matrix[,2])
   kappa_results[[paste(method1, "vs", method2)]] <- kappa
 }
-
-# 打印结果
 print(kappa_results)
 library(irr)
-
-# 转换数据格式：每行是一个特征，每列是一个方法（1=选中，0=未选中）
 fleiss_data <- as.matrix(feature_selection[, -1])
 fleiss_kappa <- kappam.fleiss(rating_matrix, exact = TRUE, detail = TRUE)
 print(fleiss_kappa)
+# =============================================================================
+# Intraclass Correlation Coefficient (ICC) Analysis
+# =============================================================================
 library(psych)
-
-# 假设importance_scores是数据框，列是方法，行是特征重要性
-# 示例数据（实际替换为你的数据）
+# Generate example importance scores (replace with actual data)
 importance_scores <- data.frame(
   LASSO = rnorm(N_features),
   RF    = rnorm(N_features),
@@ -554,27 +578,26 @@ importance_scores <- data.frame(
   XGB   = rnorm(N_features)
 )
 
-# 计算ICC（选择ICC(3, k)模型）
+# Calculate ICC for method agreement
 icc_result <- ICC(importance_scores, lmer = FALSE)
 print(icc_result)
+# =============================================================================
+# Visualization of Method Similarity
+# =============================================================================
 library(pheatmap)
-
+# Create heatmap of Jaccard similarities
 pheatmap(jaccard, 
          cluster_rows = FALSE, 
          cluster_cols = FALSE,
          display_numbers = TRUE,
          main = "Jaccard Similarity Between Methods")
-
-# 1. 计算所有两两组合的Cohen's Kappa
+methods <- colnames(rating_matrix)
+pairs <- combn(methods, 2, simplify = FALSE)
+# Generate all pairwise combinations of feature selection methods
 methods <- colnames(rating_matrix)
 pairs <- combn(methods, 2, simplify = FALSE)
 
-
-# 获取所有方法的两两组合
-methods <- colnames(rating_matrix)
-pairs <- combn(methods, 2, simplify = FALSE)
-
-# 计算每一对的Jaccard Index
+# Define custom Jaccard similarity function
 jaccard_custom <- function(x, y) {
   intersection <- sum(x == 1 & y == 1)
   union <- sum(x == 1 | y == 1)
@@ -597,16 +620,5 @@ library(reshape2)
 ggplot(melt(jaccard_matrix), aes(Var1, Var2, fill = value)) + 
   geom_tile() + 
   scale_fill_gradient(low = "white", high = "darkblue") +
-  labs(title = "模型Jaccard相似性热图")
+  labs(title = "Jaccard similarity")
 
-##################绘制PR曲线
-library(PRROC)
-df1 = read.table("lasso-test-pre-SMOTE.csv",sep=",",header=T,row.names=1)
-pr = pr.curve(scores.class0 = df1[,1], weights.class0 = df1[,5],curve = T)
-plot(pr, main="PR Curve lasso", col="#1c61b6", lwd=2)
-
-library(reportROC)
-reportROC(gold=df1$obs,
-          predictor=df1$RxTB,
-          important="se",
-          plot=TRUE)
